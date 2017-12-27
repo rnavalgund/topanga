@@ -666,54 +666,80 @@ find_strref(const char *string, int n, int prelink)
 }
 
 addr_t
-find_rootvnode(void)
-{
-    addr_t val, cbnz, adrp;
-    addr_t ref = find_strref("\"Volume mounted on a device with invalid major number.", 1, 0);
+//USE THIS ROOTVNODE FINDER.
+find_rootvnode(void) {
+    // Find the first reference to the string
+    addr_t ref = find_strref("/var/run/.vfs_rsrc_streams_%p%x", 1, 0);
     if (!ref) {
-        NSLog(@"[ERROR]: could not find 'Volume mounted on a device with invalid major number'\n");
         return 0;
     }
-    NSLog(@"ref str is at :%llx\n", (uint64_t) ref);
-    
     ref -= kerndumpbase;
     
-    cbnz = step64(kernel, ref, 91, INSN_CBNZ_1);
-    if (!cbnz) {
-
-        cbnz = step64(kernel, ref, 91, INSN_CBNZ_2);
-
-        if (!cbnz) {
-            cbnz = step64(kernel, ref, 93, INSN_CBNZ_3);
-            if(!cbnz)
-                return 0;
-        }
+    uint64_t start = bof64(kernel, xnucore_base, ref);
+    if (!start) {
+        return 0;
     }
     
-    adrp = step64(kernel, cbnz, 52, INSN_ADRP_1);
-    if (!adrp) {
-
-        adrp = step64(kernel, cbnz, 52, INSN_ADRP_2);
-        if (!adrp) {
-            
-            adrp = step64(kernel, cbnz, 52, INSN_ADRP_3);
-            if (!adrp) {
-                
-                adrp = step64(kernel, cbnz, 52, INSN_ADRP_4);
-                if(!adrp)
-                    return 0;
-            }
+    // Find MOV X9, #0x2000000000 - it's a pretty distinct instruction
+    addr_t weird_instruction = 0;
+    for (int i = 4; i < 4*0x100; i+=4) {
+        uint32_t op = *(uint32_t *)(kernel + ref - i);
+        if (op == 0xB25B03E9) {
+            weird_instruction = ref-i;
+            break;
         }
     }
-    NSLog(@"adrp is at :%llx\n", (uint64_t) adrp);
-
-    val = calc64(kernel, adrp, adrp + 16, 8);
-    if (!val)
+    if (!weird_instruction) {
         return 0;
-    NSLog(@"val(rootvnode) is at: %llx\n", val);
+    }
+    
+    uint64_t val = calc64(kernel, start, weird_instruction, 8);
+    if (!val) {
+        printf("Failed to calculate x8");
+        return 0;
+    }
     
     return val + kerndumpbase;
-    
+}
+
+addr_t
+find_kernel_pmap(void)
+{
+    addr_t call, bof, val;
+    addr_t ref = find_strref("\"pmap_map_bd\"", 1, 0);
+    if (!ref) {
+        return 0;
+    }
+    ref -= kerndumpbase;
+    call = step64_back(kernel, ref, 64, INSN_CALL);
+    if (!call) {
+        return 0;
+    }
+    bof = bof64(kernel, xnucore_base, call);
+    if (!bof) {
+        return 0;
+    }
+    val = calc64(kernel, bof, call, 2);
+    if (!val) {
+        return 0;
+    }
+    return val + kerndumpbase;
+}
+
+addr_t
+find_amfiret(void)
+{
+    addr_t ret;
+    addr_t ref = find_strref("AMFI: hook..execve() killing pid %u: %s\n", 1, 1);
+    if (!ref) {
+        return 0;
+    }
+    ref -= kerndumpbase;
+    ret = step64(kernel, ref, 512, INSN_RET);
+    if (!ret) {
+        return 0;
+    }
+    return ret + kerndumpbase;
 }
 
 
@@ -761,46 +787,6 @@ find_gPhysBase(void)
         
     }
     return val + kerndumpbase;
-}
-
-addr_t
-find_kernel_pmap(void)
-{
-    addr_t call, bof, val;
-    addr_t ref = find_strref("\"pmap_map_bd\"", 1, 0);
-    if (!ref) {
-        return 0;
-    }
-    ref -= kerndumpbase;
-    call = step64_back(kernel, ref, 64, INSN_CALL);
-    if (!call) {
-        return 0;
-    }
-    bof = bof64(kernel, xnucore_base, call);
-    if (!bof) {
-        return 0;
-    }
-    val = calc64(kernel, bof, call, 2);
-    if (!val) {
-        return 0;
-    }
-    return val + kerndumpbase;
-}
-
-addr_t
-find_amfiret(void)
-{
-    addr_t ret;
-    addr_t ref = find_strref("AMFI: hook..execve() killing pid %u: %s\n", 1, 1);
-    if (!ref) {
-        return 0;
-    }
-    ref -= kerndumpbase;
-    ret = step64(kernel, ref, 512, INSN_RET);
-    if (!ret) {
-        return 0;
-    }
-    return ret + kerndumpbase;
 }
 
 addr_t
